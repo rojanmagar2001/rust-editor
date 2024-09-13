@@ -1,0 +1,8 @@
+[package]
+name = "red"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.88"
+crossterm = "0.28.1"
