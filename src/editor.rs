@@ -68,8 +68,11 @@ impl Editor {
     }
 
     pub fn draw_status_line(&mut self) -> anyhow::Result<()> {
-        let seperators = "";
         let mode = format!(" {:?} ", self.mode).to_uppercase();
+        let file = " src/main.rs";
+        let pos = format!(" {}:{} ", self.cx, self.cy);
+
+        let file_width = self.size.0 - mode.len() as u16 - pos.len() as u16 - 2;
 
         self.stdout.queue(cursor::MoveTo(0, self.size.1 - 2))?;
         self.stdout.queue(style::PrintStyledContent(
@@ -97,7 +100,7 @@ impl Editor {
         ))?;
 
         self.stdout.queue(style::PrintStyledContent(
-            " src/main.rs "
+            format!("{:<width$}", file, width = file_width as usize)
                 .with(Color::Rgb {
                     r: 255,
                     g: 255,
@@ -108,6 +111,30 @@ impl Editor {
                     r: 67,
                     g: 70,
                     b: 89,
+                }),
+        ))?;
+
+        self.stdout.queue(style::PrintStyledContent(
+            ""
+                .with(Color::Rgb {
+                    r: 184,
+                    g: 144,
+                    b: 243,
+                })
+                .on(Color::Rgb {
+                    r: 67,
+                    g: 70,
+                    b: 89,
+                }),
+        ))?;
+
+        self.stdout.queue(style::PrintStyledContent(
+            pos.with(Color::Rgb { r: 0, g: 0, b: 0 })
+                .bold()
+                .on(Color::Rgb {
+                    r: 184,
+                    g: 144,
+                    b: 243,
                 }),
         ))?;
 
