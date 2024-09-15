@@ -3,12 +3,12 @@ use std::io::{stdout, Write};
 use anyhow::Result;
 use crossterm::{
     cursor,
-    event::{self, read},
+    event::{self, read, KeyModifiers},
     style::{self, Color, Stylize},
     terminal, ExecutableCommand, QueueableCommand,
 };
 
-use crate::buffer::Buffer;
+use crate::{buffer::Buffer, log};
 
 enum Action {
     Quit,
@@ -17,6 +17,9 @@ enum Action {
     MoveDown,
     MoveLeft,
     MoveRight,
+
+    PageUp,
+    PageDown,
 
     AddChar(char),
     NewLine,
@@ -70,7 +73,7 @@ impl Editor {
     }
 
     fn line_length(&self) -> u16 {
-        if let Some(line) = self.viewport_line(self.cx) {
+        if let Some(line) = self.viewport_line(self.cy) {
             return line.len() as u16;
         }
         0
@@ -179,19 +182,52 @@ impl Editor {
         Ok(())
     }
 
+    pub fn check_bounds(&mut self) {
+        let line_length = self.line_length();
+
+        if self.cx >= line_length {
+            if line_length > 0 {
+                self.cx = self.line_length() - 1;
+            } else {
+                self.cx = 0;
+            }
+        }
+
+        if self.cx >= self.vwidth() {
+            self.cx = self.vwidth() - 1;
+        }
+
+        // check if cy is after the end of the buffer
+        // the end of the buffer is less than vtop + cy
+        let line_on_buffer = self.cy + self.vtop;
+        if line_on_buffer as usize > self.buffer.len() - 1 {
+            self.cy = self.buffer.len() as u16 - self.vtop - 1;
+        }
+    }
+
     pub fn run(&mut self) -> anyhow::Result<()> {
         loop {
+            self.check_bounds();
             self.draw()?;
             if let Some(action) = self.handle_event(read()?)? {
                 match action {
                     Action::Quit => break,
                     Action::MoveUp => {
-                        self.cy = self.cy.saturating_sub(1);
+                        if self.cy == 0 {
+                            // scroll up
+                            if self.vtop > 0 {
+                                self.vtop -= 1;
+                            }
+                        } else {
+                            self.cy = self.cy.saturating_sub(1);
+                        }
                     }
                     Action::MoveDown => {
                         self.cy += 1;
                         if self.cy >= self.vheight() {
-                            self.cy = self.vheight() - 1;
+                            // scroll if possible
+                            self.vtop += 1;
+                            self.cy -= 1;
                         }
                     }
                     Action::MoveLeft => {
@@ -202,13 +238,15 @@ impl Editor {
                     }
                     Action::MoveRight => {
                         self.cx += 1;
-
-                        if self.cx >= self.line_length() {
-                            self.cx = self.line_length();
+                    }
+                    Action::PageUp => {
+                        if self.vtop > 0 {
+                            self.vtop = self.vtop.saturating_sub(self.vheight());
                         }
-
-                        if self.cx >= self.vwidth() {
-                            self.cx = self.vwidth() - 1;
+                    }
+                    Action::PageDown => {
+                        if self.buffer.len() > (self.vtop + self.vheight()) as usize {
+                            self.vtop += self.vheight();
                         }
                     }
                     Action::EnterMode(new_mode) => {
@@ -242,18 +280,39 @@ impl Editor {
     }
 
     fn handle_normal_event(&mut self, ev: event::Event) -> Result<Option<Action>> {
-        match ev {
-            event::Event::Key(event) => match event.code {
-                event::KeyCode::Char('q') => Ok(Some(Action::Quit)),
-                event::KeyCode::Up | event::KeyCode::Char('k') => Ok(Some(Action::MoveUp)),
-                event::KeyCode::Down | event::KeyCode::Char('j') => Ok(Some(Action::MoveDown)),
-                event::KeyCode::Left | event::KeyCode::Char('h') => Ok(Some(Action::MoveLeft)),
-                event::KeyCode::Right | event::KeyCode::Char('l') => Ok(Some(Action::MoveRight)),
-                event::KeyCode::Char('i') => Ok(Some(Action::EnterMode(Mode::Insert))),
-                _ => Ok(None),
-            },
-            _ => Ok(None),
-        }
+        log!("Event {:?}", ev);
+        let action = match ev {
+            event::Event::Key(event) => {
+                let code = event.code;
+                let modifiers = event.modifiers;
+                match code {
+                    event::KeyCode::Char('q') => Some(Action::Quit),
+                    event::KeyCode::Up | event::KeyCode::Char('k') => Some(Action::MoveUp),
+                    event::KeyCode::Down | event::KeyCode::Char('j') => Some(Action::MoveDown),
+                    event::KeyCode::Left | event::KeyCode::Char('h') => Some(Action::MoveLeft),
+                    event::KeyCode::Right | event::KeyCode::Char('l') => Some(Action::MoveRight),
+                    event::KeyCode::Char('i') => Some(Action::EnterMode(Mode::Insert)),
+                    event::KeyCode::Char('d') => {
+                        if matches!(modifiers, KeyModifiers::CONTROL) {
+                            Some(Action::PageUp)
+                        } else {
+                            None
+                        }
+                    }
+                    event::KeyCode::Char('f') => {
+                        if matches!(modifiers, KeyModifiers::CONTROL) {
+                            Some(Action::PageDown)
+                        } else {
+                            None
+                        }
+                    }
+
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        Ok(action)
     }
 
     fn handle_insert_event(&mut self, ev: event::Event) -> Result<Option<Action>> {
