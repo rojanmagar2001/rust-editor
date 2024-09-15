@@ -18,10 +18,14 @@ enum Action {
     MoveLeft,
     MoveRight,
 
+    MoveToLineStart,
+    MoveToLineEnd,
+
     PageUp,
     PageDown,
 
-    AddChar(char),
+    InsertCharAtCursorPos(char),
+    DeleteCharAtCursorPos,
     NewLine,
 
     EnterMode(Mode),
@@ -77,6 +81,10 @@ impl Editor {
             return line.len() as u16;
         }
         0
+    }
+
+    fn buffer_line(&self) -> u16 {
+        self.vtop + self.cy
     }
 
     pub fn viewport_line(&self, n: u16) -> Option<String> {
@@ -239,6 +247,12 @@ impl Editor {
                     Action::MoveRight => {
                         self.cx += 1;
                     }
+                    Action::MoveToLineStart => {
+                        self.cx = 0;
+                    }
+                    Action::MoveToLineEnd => {
+                        self.cx = self.line_length().saturating_sub(1);
+                    }
                     Action::PageUp => {
                         if self.vtop > 0 {
                             self.vtop = self.vtop.saturating_sub(self.vheight());
@@ -252,10 +266,12 @@ impl Editor {
                     Action::EnterMode(new_mode) => {
                         self.mode = new_mode;
                     }
-                    Action::AddChar(c) => {
-                        self.stdout.queue(cursor::MoveTo(self.cx, self.cy))?;
-                        self.stdout.queue(style::Print(c))?;
+                    Action::InsertCharAtCursorPos(c) => {
+                        self.buffer.insert(self.cx, self.buffer_line(), c);
                         self.cx += 1;
+                    }
+                    Action::DeleteCharAtCursorPos => {
+                        self.buffer.remove(self.cx, self.buffer_line());
                     }
                     Action::NewLine => {
                         self.cx = 0;
@@ -292,20 +308,25 @@ impl Editor {
                     event::KeyCode::Left | event::KeyCode::Char('h') => Some(Action::MoveLeft),
                     event::KeyCode::Right | event::KeyCode::Char('l') => Some(Action::MoveRight),
                     event::KeyCode::Char('i') => Some(Action::EnterMode(Mode::Insert)),
-                    event::KeyCode::Char('d') => {
+                    event::KeyCode::Char('0') | event::KeyCode::Home => {
+                        Some(Action::MoveToLineStart)
+                    }
+                    event::KeyCode::Char('$') | event::KeyCode::End => Some(Action::MoveToLineEnd),
+                    event::KeyCode::Char('d') | event::KeyCode::PageUp => {
                         if matches!(modifiers, KeyModifiers::CONTROL) {
                             Some(Action::PageUp)
                         } else {
                             None
                         }
                     }
-                    event::KeyCode::Char('f') => {
+                    event::KeyCode::Char('f') | event::KeyCode::PageDown => {
                         if matches!(modifiers, KeyModifiers::CONTROL) {
                             Some(Action::PageDown)
                         } else {
                             None
                         }
                     }
+                    event::KeyCode::Char('x') => Some(Action::DeleteCharAtCursorPos),
 
                     _ => None,
                 }
@@ -320,7 +341,7 @@ impl Editor {
             event::Event::Key(event) => match event.code {
                 event::KeyCode::Esc => Ok(Some(Action::EnterMode(Mode::Normal))),
                 event::KeyCode::Enter => Ok(Some(Action::NewLine)),
-                event::KeyCode::Char(c) => Ok(Some(Action::AddChar(c))),
+                event::KeyCode::Char(c) => Ok(Some(Action::InsertCharAtCursorPos(c))),
                 _ => Ok(None),
             },
             _ => Ok(None),
