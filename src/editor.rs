@@ -33,7 +33,7 @@ enum Action {
     DeleteCurrentLine,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum Mode {
     Normal,
     Insert,
@@ -87,8 +87,8 @@ impl Editor {
         0
     }
 
-    fn buffer_line(&self) -> u16 {
-        self.vtop + self.cy
+    fn buffer_line(&self) -> usize {
+        (self.vtop + self.cy) as usize
     }
 
     pub fn viewport_line(&self, n: u16) -> Option<String> {
@@ -235,72 +235,10 @@ impl Editor {
             self.check_bounds();
             self.draw()?;
             if let Some(action) = self.handle_event(read()?)? {
-                match action {
-                    Action::Quit => break,
-                    Action::MoveUp => {
-                        if self.cy == 0 {
-                            // scroll up
-                            if self.vtop > 0 {
-                                self.vtop -= 1;
-                            }
-                        } else {
-                            self.cy = self.cy.saturating_sub(1);
-                        }
-                    }
-                    Action::MoveDown => {
-                        self.cy += 1;
-                        if self.cy >= self.vheight() {
-                            // scroll if possible
-                            self.vtop += 1;
-                            self.cy -= 1;
-                        }
-                    }
-                    Action::MoveLeft => {
-                        self.cx = self.cx.saturating_sub(1);
-                        if self.cx < self.vleft {
-                            self.cx = self.vleft;
-                        }
-                    }
-                    Action::MoveRight => {
-                        self.cx += 1;
-                    }
-                    Action::MoveToLineStart => {
-                        self.cx = 0;
-                    }
-                    Action::MoveToLineEnd => {
-                        self.cx = self.line_length().saturating_sub(1);
-                    }
-                    Action::PageUp => {
-                        if self.vtop > 0 {
-                            self.vtop = self.vtop.saturating_sub(self.vheight());
-                        }
-                    }
-                    Action::PageDown => {
-                        if self.buffer.len() > (self.vtop + self.vheight()) as usize {
-                            self.vtop += self.vheight();
-                        }
-                    }
-                    Action::EnterMode(new_mode) => {
-                        self.mode = new_mode;
-                    }
-                    Action::InsertCharAtCursorPos(c) => {
-                        self.buffer.insert(self.cx, self.buffer_line(), c);
-                        self.cx += 1;
-                    }
-                    Action::DeleteCharAtCursorPos => {
-                        self.buffer.remove(self.cx, self.buffer_line());
-                    }
-                    Action::NewLine => {
-                        self.cx = 0;
-                        self.cy += 1;
-                    }
-                    Action::SetWaitingCmd(cmd) => {
-                        self.waiting_command = Some(cmd);
-                    }
-                    Action::DeleteCurrentLine => {
-                        self.buffer.remove_line(self.buffer_line());
-                    }
+                if matches!(action, Action::Quit) {
+                    break;
                 }
+                self.execute(&action);
             }
         }
 
@@ -395,6 +333,75 @@ impl Editor {
         };
 
         Ok(action)
+    }
+
+    fn execute(&mut self, action: &Action) {
+        match action {
+            Action::Quit => {}
+            Action::MoveUp => {
+                if self.cy == 0 {
+                    // scroll up
+                    if self.vtop > 0 {
+                        self.vtop -= 1;
+                    }
+                } else {
+                    self.cy = self.cy.saturating_sub(1);
+                }
+            }
+            Action::MoveDown => {
+                self.cy += 1;
+                if self.cy >= self.vheight() {
+                    // scroll if possible
+                    self.vtop += 1;
+                    self.cy -= 1;
+                }
+            }
+            Action::MoveLeft => {
+                self.cx = self.cx.saturating_sub(1);
+                if self.cx < self.vleft {
+                    self.cx = self.vleft;
+                }
+            }
+            Action::MoveRight => {
+                self.cx += 1;
+            }
+            Action::MoveToLineStart => {
+                self.cx = 0;
+            }
+            Action::MoveToLineEnd => {
+                self.cx = self.line_length().saturating_sub(1);
+            }
+            Action::PageUp => {
+                if self.vtop > 0 {
+                    self.vtop = self.vtop.saturating_sub(self.vheight());
+                }
+            }
+            Action::PageDown => {
+                if self.buffer.len() > (self.vtop + self.vheight()) as usize {
+                    self.vtop += self.vheight();
+                }
+            }
+            Action::EnterMode(new_mode) => {
+                self.mode = *new_mode;
+            }
+            Action::InsertCharAtCursorPos(c) => {
+                self.buffer.insert(self.cx, self.buffer_line(), *c);
+                self.cx += 1;
+            }
+            Action::DeleteCharAtCursorPos => {
+                self.buffer.remove(self.cx, self.buffer_line());
+            }
+            Action::NewLine => {
+                self.cx = 0;
+                self.cy += 1;
+            }
+            Action::SetWaitingCmd(cmd) => {
+                self.waiting_command = Some(*cmd);
+            }
+            Action::DeleteCurrentLine => {
+                self.buffer.remove_line(self.buffer_line());
+            }
+        }
     }
 
     pub fn cleanup(&mut self) -> anyhow::Result<()> {
