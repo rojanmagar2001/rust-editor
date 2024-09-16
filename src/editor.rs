@@ -29,6 +29,8 @@ enum Action {
     NewLine,
 
     EnterMode(Mode),
+    SetWaitingCmd(char),
+    DeleteCurrentLine,
 }
 
 #[derive(Debug)]
@@ -46,6 +48,7 @@ pub struct Editor {
     cx: u16,
     cy: u16,
     mode: Mode,
+    waiting_command: Option<char>,
 }
 
 impl Editor {
@@ -64,6 +67,7 @@ impl Editor {
             cx: 0,
             cy: 0,
             mode: Mode::Normal,
+            waiting_command: None,
             size: terminal::size()?,
         })
     }
@@ -93,7 +97,17 @@ impl Editor {
         self.buffer.get(buffer_line as usize)
     }
 
+    fn set_cursor_style(&mut self) -> anyhow::Result<()> {
+        self.stdout.queue(match self.waiting_command {
+            Some(_) => cursor::SetCursorStyle::SteadyUnderScore,
+            None => cursor::SetCursorStyle::DefaultUserShape,
+        })?;
+
+        Ok(())
+    }
+
     pub fn draw(&mut self) -> anyhow::Result<()> {
+        self.set_cursor_style()?;
         self.draw_viewport()?;
         self.draw_status_line()?;
         self.stdout.queue(cursor::MoveTo(self.cx, self.cy))?;
@@ -277,6 +291,12 @@ impl Editor {
                         self.cx = 0;
                         self.cy += 1;
                     }
+                    Action::SetWaitingCmd(cmd) => {
+                        self.waiting_command = Some(cmd);
+                    }
+                    Action::DeleteCurrentLine => {
+                        self.buffer.remove_line(self.buffer_line());
+                    }
                 }
             }
         }
@@ -297,6 +317,12 @@ impl Editor {
 
     fn handle_normal_event(&mut self, ev: event::Event) -> Result<Option<Action>> {
         log!("Event {:?}", ev);
+
+        if let Some(cmd) = self.waiting_command {
+            self.waiting_command = None;
+            return self.handle_waiting_command(cmd, ev);
+        }
+
         let action = match ev {
             event::Event::Key(event) => {
                 let code = event.code;
@@ -312,7 +338,7 @@ impl Editor {
                         Some(Action::MoveToLineStart)
                     }
                     event::KeyCode::Char('$') | event::KeyCode::End => Some(Action::MoveToLineEnd),
-                    event::KeyCode::Char('d') | event::KeyCode::PageUp => {
+                    event::KeyCode::Char('b') | event::KeyCode::PageUp => {
                         if matches!(modifiers, KeyModifiers::CONTROL) {
                             Some(Action::PageUp)
                         } else {
@@ -327,7 +353,7 @@ impl Editor {
                         }
                     }
                     event::KeyCode::Char('x') => Some(Action::DeleteCharAtCursorPos),
-
+                    event::KeyCode::Char('d') => Some(Action::SetWaitingCmd('d')),
                     _ => None,
                 }
             }
@@ -346,6 +372,26 @@ impl Editor {
             },
             _ => Ok(None),
         }
+    }
+
+    //TODO I don't think this handlers are ever gonna fail,
+    fn handle_waiting_command(
+        &self,
+        cmd: char,
+        ev: event::Event,
+    ) -> anyhow::Result<Option<Action>> {
+        let action = match cmd {
+            'd' => match ev {
+                event::Event::Key(event) => match event.code {
+                    event::KeyCode::Char('d') => Some(Action::DeleteCurrentLine),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        };
+
+        Ok(action)
     }
 
     pub fn cleanup(&mut self) -> anyhow::Result<()> {

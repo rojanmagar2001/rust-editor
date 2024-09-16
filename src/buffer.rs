@@ -39,4 +39,10 @@ impl Buffer {
             (*line).remove(x as usize);
         }
     }
+
+    pub fn remove_line(&mut self, line: u16) {
+        if self.len() > line as usize {
+            self.lines.remove(line as usize);
+        }
+    }
 }
