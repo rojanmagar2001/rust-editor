@@ -11,6 +11,7 @@ use crossterm::{
 use crate::{buffer::Buffer, log};
 
 enum Action {
+    Undo,
     Quit,
 
     MoveUp,
@@ -31,6 +32,8 @@ enum Action {
     EnterMode(Mode),
     SetWaitingCmd(char),
     DeleteCurrentLine,
+    InsertLineAt(usize, Option<String>),
+    MoveLineToViewportCenter,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -43,12 +46,13 @@ pub struct Editor {
     buffer: Buffer,
     stdout: std::io::Stdout,
     size: (u16, u16),
-    vtop: u16,
+    vtop: usize,
     vleft: u16,
     cx: u16,
     cy: u16,
     mode: Mode,
     waiting_command: Option<char>,
+    undo_actions: Vec<Action>,
 }
 
 impl Editor {
@@ -69,6 +73,7 @@ impl Editor {
             mode: Mode::Normal,
             waiting_command: None,
             size: terminal::size()?,
+            undo_actions: vec![],
         })
     }
 
@@ -88,13 +93,13 @@ impl Editor {
     }
 
     fn buffer_line(&self) -> usize {
-        (self.vtop + self.cy) as usize
+        self.vtop + self.cy as usize
     }
 
     pub fn viewport_line(&self, n: u16) -> Option<String> {
-        let buffer_line = self.vtop + n;
+        let buffer_line = self.vtop + n as usize;
 
-        self.buffer.get(buffer_line as usize)
+        self.buffer.get(buffer_line)
     }
 
     fn set_cursor_style(&mut self) -> anyhow::Result<()> {
@@ -224,9 +229,9 @@ impl Editor {
 
         // check if cy is after the end of the buffer
         // the end of the buffer is less than vtop + cy
-        let line_on_buffer = self.cy + self.vtop;
-        if line_on_buffer as usize > self.buffer.len() - 1 {
-            self.cy = self.buffer.len() as u16 - self.vtop - 1;
+        let line_on_buffer = self.cy as usize + self.vtop;
+        if line_on_buffer > self.buffer.len() - 1 {
+            self.cy = (self.buffer.len() - self.vtop - 1) as u16;
         }
     }
 
@@ -270,6 +275,7 @@ impl Editor {
                 let modifiers = event.modifiers;
                 match code {
                     event::KeyCode::Char('q') => Some(Action::Quit),
+                    event::KeyCode::Char('u') => Some(Action::Undo),
                     event::KeyCode::Up | event::KeyCode::Char('k') => Some(Action::MoveUp),
                     event::KeyCode::Down | event::KeyCode::Char('j') => Some(Action::MoveDown),
                     event::KeyCode::Left | event::KeyCode::Char('h') => Some(Action::MoveLeft),
@@ -295,6 +301,7 @@ impl Editor {
                     }
                     event::KeyCode::Char('x') => Some(Action::DeleteCharAtCursorPos),
                     event::KeyCode::Char('d') => Some(Action::SetWaitingCmd('d')),
+                    event::KeyCode::Char('g') => Some(Action::SetWaitingCmd('g')),
                     _ => None,
                 }
             }
@@ -325,6 +332,13 @@ impl Editor {
             'd' => match ev {
                 event::Event::Key(event) => match event.code {
                     event::KeyCode::Char('d') => Some(Action::DeleteCurrentLine),
+                    _ => None,
+                },
+                _ => None,
+            },
+            'g' => match ev {
+                event::Event::Key(event) => match event.code {
+                    event::KeyCode::Char('g') => Some(Action::MoveLineToViewportCenter),
                     _ => None,
                 },
                 _ => None,
@@ -373,12 +387,12 @@ impl Editor {
             }
             Action::PageUp => {
                 if self.vtop > 0 {
-                    self.vtop = self.vtop.saturating_sub(self.vheight());
+                    self.vtop = self.vtop.saturating_sub(self.vheight() as usize);
                 }
             }
             Action::PageDown => {
-                if self.buffer.len() > (self.vtop + self.vheight()) as usize {
-                    self.vtop += self.vheight();
+                if self.buffer.len() > (self.vtop + self.vheight() as usize) {
+                    self.vtop += self.vheight() as usize;
                 }
             }
             Action::EnterMode(new_mode) => {
@@ -399,7 +413,60 @@ impl Editor {
                 self.waiting_command = Some(*cmd);
             }
             Action::DeleteCurrentLine => {
+                let line = self.buffer_line();
+                let contents = self.current_line_contents();
+
                 self.buffer.remove_line(self.buffer_line());
+
+                self.undo_actions.push(Action::InsertLineAt(line, contents));
+            }
+            Action::Undo => {
+                if let Some(undo_action) = self.undo_actions.pop() {
+                    self.execute(&undo_action);
+                }
+            }
+            Action::InsertLineAt(y, contents) => {
+                if let Some(contents) = contents {
+                    self.buffer.insert_line(*y, contents.to_string());
+                    self.cy = *y as u16;
+                }
+            }
+            Action::MoveLineToViewportCenter => {
+                log!("cy = {}, viewport height = {}", self.cy, self.vheight());
+                let viewport_center = self.vheight() / 2;
+                log!("vcenter = {viewport_center}");
+                let distance_to_center = self.cy as isize - viewport_center as isize;
+                log!("dtocenter = {distance_to_center}");
+
+                // We need to move up
+                if distance_to_center > 0 {
+                    log!("distance to center > 0");
+                    let distance_to_center = distance_to_center.abs() as usize;
+                    log!(
+                        "vtop = {} > distance_to_center = {distance_to_center}?",
+                        self.vtop
+                    );
+                    if self.vtop > distance_to_center {
+                        let new_vtop = self.vtop + distance_to_center;
+                        log!("yes, new vtop {new_vtop}");
+                        self.vtop = new_vtop;
+                        self.cy = viewport_center;
+                    }
+                } else if distance_to_center < 0 {
+                    // if distance < 0 we need to scroll down
+                    let distance_to_center = distance_to_center.abs() as usize;
+                    let new_vtop = self.vtop.saturating_sub(distance_to_center);
+                    let distance_to_go = self.vtop + distance_to_center;
+                    log!(
+                        "buffer len = {} > distance_to_go = {distance_to_go}",
+                        self.buffer.len()
+                    );
+                    if self.buffer.len() > distance_to_go && new_vtop != self.vtop {
+                        log!("yes, new vtop {new_vtop}");
+                        self.vtop = new_vtop;
+                        self.cy = viewport_center;
+                    }
+                }
             }
         }
     }
@@ -410,5 +477,9 @@ impl Editor {
         terminal::disable_raw_mode()?;
 
         Ok(())
+    }
+
+    fn current_line_contents(&self) -> Option<String> {
+        self.buffer.get(self.buffer_line())
     }
 }

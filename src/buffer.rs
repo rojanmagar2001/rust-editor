@@ -45,4 +45,10 @@ impl Buffer {
             self.lines.remove(line);
         }
     }
+
+    pub(crate) fn insert_line(&mut self, y: usize, contents: String) {
+        if self.len() > y {
+            self.lines.insert(y, contents);
+        }
+    }
 }
